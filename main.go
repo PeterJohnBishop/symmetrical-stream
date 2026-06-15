@@ -1,15 +1,21 @@
 package main
 
 import (
-	"fmt"
+	"encoding/json"
 	"io"
 	"log"
 	"net/http"
 	"os"
 
 	"github.com/joho/godotenv"
+	"github.com/peterjohnbishop/symmetrical-stream/rtconn"
 	"github.com/peterjohnbishop/symmetrical-stream/wsconn"
 )
+
+type ServerResponse struct {
+	Status  string `json:"Status"`
+	Message string `json:"Message"`
+}
 
 func main() {
 	if err := godotenv.Load(); err != nil {
@@ -22,32 +28,33 @@ func main() {
 	}
 	resp, err := http.Get("https://" + host)
 	if err != nil {
-		fmt.Println("Error fetching the URL:", err)
-		return
+		log.Fatal("Error fetching the URL:", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		fmt.Println("Error reading the response body:", err)
-		return
+		log.Fatal("Error reading the response body:", err)
 	}
 
-	fmt.Println(string(body))
+	var response ServerResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		log.Fatal("Error unmarshaling JSON:", err)
+	}
+
+	if response.Status != "Active" {
+		log.Fatalf("Server returned non-OK status: %s - %s", response.Status, response.Message)
+	}
 
 	wss := wsconn.ConnectionManager{
 		MessageChan: make(chan wsconn.EventMessage),
-		ErrorChan:   make(chan error),
+		StatusChan:  make(chan string, 100),
 	}
 
-	conn, err := wss.Connect()
-	if err != nil {
-		log.Fatal("Failed to connect to WebSocket server:", err)
+	rtc := rtconn.WebRTCManager{
+		WC:             &wss,
+		StatusChan:     make(chan string, 100),
+		LocalDataChan:  make(chan string, 5),
+		RemoteDataChan: make(chan string, 5),
 	}
-
-	wss.Conn = conn
-	go wss.StartListening()
-
-	// Keep the main function running to listen for messages
-	select {}
 }

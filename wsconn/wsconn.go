@@ -14,7 +14,7 @@ type ConnectionManager struct {
 	Conn        *websocket.Conn
 	Err         error
 	MessageChan chan EventMessage
-	ErrorChan   chan error
+	StatusChan  chan string
 	ID          string
 }
 
@@ -27,10 +27,12 @@ type EventMessage struct {
 }
 
 // Connect establishes a WebSocket connection to the signaling server using the host specified in the environment variable or defaults to localhost:8080. It returns the established connection or an error if the connection fails.
-func (c *ConnectionManager) Connect() (*websocket.Conn, error) {
+func (c *ConnectionManager) Connect() *websocket.Conn {
 	host := os.Getenv("HOST")
 	if host == "" {
 		host = "localhost:8080"
+		status := fmt.Sprintf("HOST environment variable not set, defaulting to %s\n", host)
+		c.StatusChan <- status
 	}
 	scheme := "wss"
 	if strings.HasPrefix(host, "localhost") || strings.HasPrefix(host, "127.0.0.1") {
@@ -39,9 +41,20 @@ func (c *ConnectionManager) Connect() (*websocket.Conn, error) {
 	u := url.URL{Scheme: scheme, Host: host, Path: "/ws"}
 	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	if err != nil {
-		return nil, err
+		status := fmt.Sprintf("Failed to connect to WebSocket server at %s: %v", u.String(), err)
+		c.StatusChan <- status
+		return nil
 	}
-	return conn, nil
+	return conn
+}
+
+func (c *ConnectionManager) sendStatus(msg string) {
+	if c.StatusChan != nil {
+		select {
+		case c.StatusChan <- msg:
+		default:
+		}
+	}
 }
 
 // StartListening continuously reads messages from the WebSocket connection and sends them to the MessageChan. If an error occurs while reading, it sends the error to the ErrorChan and exits.
@@ -51,13 +64,15 @@ func (c *ConnectionManager) StartListening() {
 	for {
 		_, rawMsg, err := c.Conn.ReadMessage()
 		if err != nil {
-			c.ErrorChan <- fmt.Errorf("connection closed or read error: %w", err)
+			status := fmt.Sprintf("connection closed or read error: %w", err)
+			c.StatusChan <- status
 			return
 		}
 
 		var msg EventMessage
 		if err := json.Unmarshal(rawMsg, &msg); err != nil {
-			c.ErrorChan <- fmt.Errorf("failed to unmarshal message: %w", err)
+			status := fmt.Sprintf("failed to unmarshal message: %w", err)
+			c.StatusChan <- status
 			continue
 		}
 		c.MessageChan <- msg
@@ -83,10 +98,7 @@ func (c *ConnectionManager) SendEventMessage(eventType string, msgContent string
 
 	err := c.Conn.WriteJSON(event)
 	if err != nil {
-		select {
-		case c.ErrorChan <- err:
-		default:
-			c.ErrorChan <- fmt.Errorf("[ERROR] Failed to send error: %v", err)
-		}
+		status := fmt.Sprintf("Failed to send message: %v", err)
+		c.StatusChan <- status
 	}
 }
