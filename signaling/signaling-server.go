@@ -8,15 +8,18 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
 
-type SignalingServerManager struct {
-	mux     *sync.RWMutex
-	Conn    *websocket.Conn
-	ID      string
-	ErrChan chan error
+type SignalingManager struct {
+	Mux         *sync.RWMutex
+	Conn        *websocket.Conn
+	Identifier  string
+	Receiver    string
+	MessageChan chan EventMessage
+	ErrChan     chan error
 }
 
 type EventMessage struct {
@@ -28,7 +31,7 @@ type EventMessage struct {
 }
 
 // ConnectToSignalingServer establishes the websocket connection to the signaling server.
-func (s *SignalingServerManager) ConnectToSignalingServer() (*websocket.Conn, error) {
+func (s *SignalingManager) ConnectToSignalingServer() {
 	host := os.Getenv("HOST")
 	if host == "" {
 		host = "localhost:8080"
@@ -38,20 +41,58 @@ func (s *SignalingServerManager) ConnectToSignalingServer() (*websocket.Conn, er
 		scheme = "ws"
 	}
 	u := url.URL{Scheme: scheme, Host: host, Path: "/ws"}
-	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	var err error
+	s.Conn, _, err = websocket.DefaultDialer.Dial(u.String(), nil)
 	if err != nil {
 		select {
 		case s.ErrChan <- fmt.Errorf("[ERROR]failed to register with the signaling server: %w", err):
 		default:
 			fmt.Printf("[ERROR] Dropped error message to avoid blocking: %v\n", err)
 		}
+		return
 	}
+}
 
-	return conn, nil
+func (s *SignalingManager) StartListening() {
+	defer close(s.MessageChan)
+
+	s.Mux.Lock()
+	if s.Conn != nil {
+		s.Conn.SetReadDeadline(time.Time{})
+	}
+	s.Mux.Unlock()
+
+	for {
+		if s.Conn == nil {
+			return
+		}
+
+		_, rawMsg, err := s.Conn.ReadMessage()
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				select {
+				case s.ErrChan <- fmt.Errorf("websocket connection lost unexpectedly: %w", err):
+				default:
+				}
+			}
+			return
+		}
+
+		var msg EventMessage
+		if err := json.Unmarshal(rawMsg, &msg); err != nil {
+			fmt.Printf("[WARN] Failed to parse signaling payload: %v\n", err)
+			continue
+		}
+
+		select {
+		case s.MessageChan <- msg:
+		default:
+		}
+	}
 }
 
 // SendEventMessage sends an event, message, and the senderID to the signaling server. Target and rawData are optional. Errors are sent to the errChan.
-func (s *SignalingServerManager) SendEventMessage(eventType string, msgContent string, target *string, rawData ...json.RawMessage) {
+func (s *SignalingManager) SendEventMessage(eventType string, msgContent string, target *string, rawData ...json.RawMessage) {
 	var targetVal string
 	if target != nil {
 		targetVal = *target
@@ -60,20 +101,20 @@ func (s *SignalingServerManager) SendEventMessage(eventType string, msgContent s
 	event := EventMessage{
 		Type:    eventType,
 		Message: msgContent,
-		Sender:  s.ID,
+		Sender:  s.Identifier,
 		Target:  targetVal,
 	}
 	if len(rawData) > 0 {
 		event.Data = rawData[0]
 	}
 
-	s.mux.Lock()
+	s.Mux.Lock()
 	if s.Conn == nil {
-		s.mux.Unlock()
+		s.Mux.Unlock()
 		return
 	}
 	err := s.Conn.WriteJSON(event)
-	s.mux.Unlock()
+	s.Mux.Unlock()
 
 	if err != nil {
 		select {
@@ -81,25 +122,26 @@ func (s *SignalingServerManager) SendEventMessage(eventType string, msgContent s
 		default:
 			fmt.Printf("[ERROR] Dropped error message to avoid blocking: %v\n", err)
 		}
+		return
 	}
 }
 
 // RegisterWithSignalingServer sends an EventMessage specifically for registering the device with the signaling server, making it discoverable by other devices.
-func (s *SignalingServerManager) RegisterWithSignalingServer() {
+func (s *SignalingManager) RegisterWithSignalingServer() {
 
 	event := EventMessage{
 		Type:    "connect",
 		Message: "Registering device with the signaling server",
-		Sender:  s.ID,
+		Sender:  s.Identifier,
 	}
 
-	s.mux.Lock()
+	s.Mux.Lock()
 	if s.Conn == nil {
-		s.mux.Unlock()
+		s.Mux.Unlock()
 		return
 	}
 	err := s.Conn.WriteJSON(event)
-	s.mux.Unlock()
+	s.Mux.Unlock()
 
 	if err != nil {
 		select {
@@ -107,5 +149,6 @@ func (s *SignalingServerManager) RegisterWithSignalingServer() {
 		default:
 			fmt.Printf("[ERROR] Dropped error message to avoid blocking: %v\n", err)
 		}
+		return
 	}
 }

@@ -9,70 +9,99 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
-func StartWebRTC(isSender bool, mux *sync.RWMutex, conn *websocket.Conn, statusChan chan string, dataChan chan []byte) (*webrtc.PeerConnection, *webrtc.DataChannel, error) {
-	pc := &webrtc.PeerConnection{}
-	dc := &webrtc.DataChannel{}
+type WebRTCManager struct {
+	Mux         *sync.RWMutex
+	WC          *websocket.Conn
+	PC          *webrtc.PeerConnection
+	DC          *webrtc.DataChannel
+	StatusChan  chan string
+	ErrChan     chan error
+	DataChan    chan []byte
+	MessageChan chan []byte
+	Identifier  string
+	Receiver    string
+}
+
+type EventMessage struct {
+	Type    string          `json:"type"`
+	Sender  string          `json:"sender"`
+	Target  string          `json:"target,omitempty"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data,omitempty"`
+}
+
+func (w *WebRTCManager) StartWebRTC(isSender bool) {
 	var err error
-
-	mux.RLock()
-	wc := conn
-	mux.RUnlock()
-
-	if wc == nil {
-		return nil, nil, fmt.Errorf("connection manager must have an initialized websocket")
+	if w.WC == nil {
+		select {
+		case w.ErrChan <- fmt.Errorf("connection manager must have an initialized websocket"):
+		default:
+			fmt.Printf("[ERROR] Dropped error message to avoid blocking\n")
+		}
+		return
 	}
 
 	config := webrtc.Configuration{
 		ICEServers: []webrtc.ICEServer{{URLs: []string{"stun:stun.l.google.com:19302"}}},
 	}
 
-	pc, err = webrtc.NewPeerConnection(config)
+	w.PC, err = webrtc.NewPeerConnection(config)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create peer connection: %w", err)
+		select {
+		case w.ErrChan <- fmt.Errorf("failed to create peer connection: %w", err):
+		default:
+			fmt.Printf("[ERROR] Dropped error message to avoid blocking\n")
+		}
+		return
 	}
 
 	if isSender {
-		dc, err := pc.CreateDataChannel("dataTransfer", nil)
+		w.DC, err = w.PC.CreateDataChannel("dataTransfer", nil)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create data channel: %w", err)
+			select {
+			case w.ErrChan <- fmt.Errorf("failed to create data channel: %w", err):
+			default:
+				fmt.Printf("[ERROR] Dropped error message to avoid blocking\n")
+			}
+			return
 		}
 
-		dc.OnOpen(func() {
-			if statusChan != nil {
+		w.DC.OnOpen(func() {
+			if w.StatusChan != nil {
 				select {
-				case statusChan <- "Local Data channel is open. Sending...":
+				case w.StatusChan <- "Local Data channel is open. Sending...":
 				default:
 				}
 			}
 		})
 
-		dc.OnMessage(func(msg webrtc.DataChannelMessage) {
-			if dataChan != nil {
+		w.DC.OnMessage(func(msg webrtc.DataChannelMessage) {
+			if w.DataChan != nil {
 				select {
-				case dataChan <- msg.Data:
+				case w.DataChan <- msg.Data:
 				default:
 				}
 			}
 		})
 	} else {
-		pc.OnDataChannel(func(d *webrtc.DataChannel) {
-			mux.Lock()
-			dc = d
-			mux.Unlock()
+		w.PC.OnDataChannel(func(d *webrtc.DataChannel) {
+			w.Mux.Lock()
+			w.DC = d
+			w.Mux.Unlock()
 
 			d.OnOpen(func() {
-				if statusChan != nil {
+				if w.StatusChan != nil {
 					select {
-					case statusChan <- "Remote Data channel opened. Ready to receive...":
+					case w.StatusChan <- "Remote Data channel opened. Ready to receive...":
 					default:
 					}
 				}
 			})
 
 			d.OnMessage(func(msg webrtc.DataChannelMessage) {
-				if dataChan != nil {
+				if w.DataChan != nil {
 					select {
-					case dataChan <- msg.Data:
+					case w.DataChan <- msg.Data:
 					default:
 					}
 				}
@@ -80,7 +109,7 @@ func StartWebRTC(isSender bool, mux *sync.RWMutex, conn *websocket.Conn, statusC
 		})
 	}
 
-	pc.OnICECandidate(func(candidate *webrtc.ICECandidate) {
+	w.PC.OnICECandidate(func(candidate *webrtc.ICECandidate) {
 		if candidate == nil {
 			return
 		}
@@ -88,30 +117,241 @@ func StartWebRTC(isSender bool, mux *sync.RWMutex, conn *websocket.Conn, statusC
 		candidateJSON := candidate.ToJSON()
 		candidateBytes, err := json.Marshal(candidateJSON)
 		if err != nil {
-			if statusChan != nil {
+			if w.StatusChan != nil {
 				select {
-				case statusChan <- fmt.Sprintf("Failed to marshal ICE candidate: %v", err):
+				case w.StatusChan <- fmt.Sprintf("Failed to marshal ICE candidate: %v", err):
 				default:
 				}
 			}
 			return
 		}
 
-		p.mu.RLock()
-		target := p.ActivePeer
-		p.mu.RUnlock()
+		msg := EventMessage{
+			Type:    "candidate",
+			Sender:  w.Identifier,
+			Message: "ICE Candidate",
+			Target:  w.Receiver,
+			Data:    candidateBytes,
+		}
 
-		p.SendEventMessage("candidate", "ICE Candidate", &target, candidateBytes)
+		msgBytes, err := json.Marshal(msg)
+
+		w.MessageChan <- msgBytes
+
 	})
 
-	pc.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
-		p.sendStatus(fmt.Sprintf("ICE Connection State has changed: %s", connectionState.String()))
-
+	w.PC.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
+		if w.StatusChan != nil {
+			select {
+			case w.StatusChan <- fmt.Sprintf("ICE Connection State has changed: %s", connectionState.String()):
+			default:
+			}
+		}
 		if connectionState == webrtc.ICEConnectionStateConnected {
-			p.sendStatus("Peers connected!")
+			if w.StatusChan != nil {
+
+				select {
+				case w.StatusChan <- "Peers connected!":
+				default:
+				}
+			}
 		}
 	})
 
-	p.sendStatus("WebRTC is ready to connect. Searching for ICE candidates...")
+	if w.StatusChan != nil {
+
+		select {
+		case w.StatusChan <- "WebRTC is ready to connect. Searching for ICE candidates...":
+		default:
+		}
+	}
+}
+
+func (w *WebRTCManager) HandleICECandidate(candidateBytes []byte) error {
+	w.Mux.RLock()
+	pc := w.PC
+	w.Mux.RUnlock()
+
+	if pc == nil {
+		return fmt.Errorf("peer connection must be initialized before adding candidates")
+	}
+
+	var candidate webrtc.ICECandidateInit
+	if err := json.Unmarshal(candidateBytes, &candidate); err != nil {
+		return fmt.Errorf("failed to unmarshal remote ICE candidate: %w", err)
+	}
+
+	if err := pc.AddICECandidate(candidate); err != nil {
+		return fmt.Errorf("failed to add remote ICE candidate: %w", err)
+	}
+
+	if w.StatusChan != nil {
+		select {
+		case w.StatusChan <- "Remote ICE candidate applied successfully.":
+		default:
+		}
+	}
 	return nil
+}
+
+func (w *WebRTCManager) SendOffer(target string) error {
+	w.Mux.RLock()
+	pc := w.PC
+	w.Mux.RUnlock()
+
+	if pc == nil {
+		return fmt.Errorf("peer connection is nil. call StartWebRTC first")
+	}
+
+	offer, err := pc.CreateOffer(nil)
+	if err != nil {
+		return fmt.Errorf("failed to create an offer: %w", err)
+	}
+
+	if err := pc.SetLocalDescription(offer); err != nil {
+		return fmt.Errorf("failed to set local description: %w", err)
+	}
+
+	offerBytes, err := json.Marshal(offer)
+	if err != nil {
+		return fmt.Errorf("failed to marshal offer: %w", err)
+	}
+
+	msg := EventMessage{
+		Type:    "offer",
+		Sender:  w.Identifier,
+		Message: "WebRTC",
+		Target:  target,
+		Data:    offerBytes,
+	}
+
+	msgBytes, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal event message: %w", err)
+	}
+
+	w.MessageChan <- msgBytes
+
+	if w.StatusChan != nil {
+		select {
+		case w.StatusChan <- "outbound offer generated and sent to signaling server.":
+		default:
+		}
+	}
+	return nil
+}
+
+func (w *WebRTCManager) HandleOffer(sender string, offerBytes []byte) error {
+	w.Mux.RLock()
+	pc := w.PC
+	w.Mux.RUnlock()
+
+	if pc == nil {
+		return fmt.Errorf("peer connection must be initialized")
+	}
+
+	var offer webrtc.SessionDescription
+	if err := json.Unmarshal(offerBytes, &offer); err != nil {
+		return fmt.Errorf("failed to unmarshal remote offer: %w", err)
+	}
+
+	if err := pc.SetRemoteDescription(offer); err != nil {
+		return fmt.Errorf("failed to set the session description: %w", err)
+	}
+
+	answer, err := pc.CreateAnswer(nil)
+	if err != nil {
+		return fmt.Errorf("failed to create an answer: %w", err)
+	}
+
+	if err := pc.SetLocalDescription(answer); err != nil {
+		return fmt.Errorf("failed to set the local description: %w", err)
+	}
+
+	answerBytes, err := json.Marshal(answer)
+	if err != nil {
+		return fmt.Errorf("failed to marshal answer: %w", err)
+	}
+
+	msg := EventMessage{
+		Type:    "answer",
+		Sender:  w.Identifier,
+		Message: "WebRTC Answer",
+		Target:  sender,
+		Data:    answerBytes,
+	}
+
+	msgBytes, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal event message: %w", err)
+	}
+
+	w.MessageChan <- msgBytes
+
+	if w.StatusChan != nil {
+		select {
+		case w.StatusChan <- "offer accepted. outbound answer sent.":
+		default:
+		}
+	}
+	return nil
+}
+
+func (w *WebRTCManager) HandleAnswer(answerBytes []byte) error {
+	w.Mux.RLock()
+	pc := w.PC
+	w.Mux.RUnlock()
+
+	if pc == nil {
+		return fmt.Errorf("peer connection must be initialized")
+	}
+
+	var answer webrtc.SessionDescription
+	if err := json.Unmarshal(answerBytes, &answer); err != nil {
+		return fmt.Errorf("failed to unmarshal remote answer: %w", err)
+	}
+
+	if err := pc.SetRemoteDescription(answer); err != nil {
+		return fmt.Errorf("failed to apply remote answer: %w", err)
+	}
+
+	if w.StatusChan != nil {
+		select {
+		case w.StatusChan <- "handshake complete for P2P tunnel":
+		default:
+		}
+	}
+	return nil
+}
+
+func (w *WebRTCManager) SafeWriteBytesToDC(data []byte) error {
+	w.Mux.RLock()
+	defer w.Mux.RUnlock()
+
+	if w.DC == nil {
+		return fmt.Errorf("data channel is not initialized")
+	}
+
+	return w.DC.Send(data)
+}
+
+func (w *WebRTCManager) DisconnectWebRTC() {
+	w.Mux.Lock()
+	defer w.Mux.Unlock()
+
+	if w.DC != nil {
+		w.DC.Close()
+	}
+	if w.PC != nil {
+		w.PC.Close()
+	}
+	w.DC = nil
+	w.PC = nil
+
+	if w.StatusChan != nil {
+		select {
+		case w.StatusChan <- "WebRTC connection closed":
+		default:
+		}
+	}
 }
