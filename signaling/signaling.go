@@ -27,7 +27,7 @@ func (s *SignalingManager) ConnectToSignalingServer() {
 	s.Conn, _, err = websocket.DefaultDialer.Dial(u.String(), nil)
 	if err != nil {
 		select {
-		case s.ErrChan <- fmt.Errorf("[ERROR]failed to register with the signaling server: %w", err):
+		case s.ErrChan <- fmt.Errorf("[ERROR]failed to reach the signaling server: %w", err):
 		default:
 			fmt.Printf("[ERROR] Dropped error message to avoid blocking: %v\n", err)
 		}

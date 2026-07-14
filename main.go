@@ -5,13 +5,16 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"os"
 	"sync"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/joho/godotenv"
 	"github.com/peterjohnbishop/symmetrical-stream/chunking"
 	"github.com/peterjohnbishop/symmetrical-stream/signaling"
 	"github.com/peterjohnbishop/symmetrical-stream/streaming"
+	"github.com/peterjohnbishop/symmetrical-stream/tui"
 )
 
 func main() {
@@ -58,7 +61,12 @@ func main() {
 		}
 	}()
 
-	select {}
+	app := tui.InitialModel(ss)
+	p := tea.NewProgram(app)
+	if _, err := p.Run(); err != nil {
+		fmt.Printf("Alas, there's been an error starting the TUI: %v", err)
+		os.Exit(1)
+	}
 }
 
 // GenerateIdentifier generates a time based 6 digit value as a unique identifier
