@@ -1,3 +1,4 @@
+// Package streaming handles the WebRTC connection
 package streaming
 
 import (
@@ -135,9 +136,16 @@ func (w *WebRTCManager) StartWebRTC(isSender bool) {
 		}
 
 		msgBytes, err := json.Marshal(msg)
+		if err != nil {
+			if w.StatusChan != nil {
+				select {
+				case w.StatusChan <- fmt.Sprintf("Failed to marshal EventMessage: %v", err):
+				default:
+				}
+			}
+		}
 
 		w.MessageChan <- msgBytes
-
 	})
 
 	w.PC.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
@@ -149,7 +157,6 @@ func (w *WebRTCManager) StartWebRTC(isSender bool) {
 		}
 		if connectionState == webrtc.ICEConnectionStateConnected {
 			if w.StatusChan != nil {
-
 				select {
 				case w.StatusChan <- "Peers connected!":
 				default:
@@ -159,7 +166,6 @@ func (w *WebRTCManager) StartWebRTC(isSender bool) {
 	})
 
 	if w.StatusChan != nil {
-
 		select {
 		case w.StatusChan <- "WebRTC is ready to connect. Searching for ICE candidates...":
 		default:

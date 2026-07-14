@@ -53,6 +53,7 @@ func (s *SignalingManager) ConnectToSignalingServer() {
 	}
 }
 
+// StartListening listens for EventMessages
 func (s *SignalingManager) StartListening() {
 	defer close(s.MessageChan)
 
@@ -91,7 +92,7 @@ func (s *SignalingManager) StartListening() {
 	}
 }
 
-// SendEventMessage sends an event, message, and the senderID to the signaling server. Target and rawData are optional. Errors are sent to the errChan.
+// SendEventMessage sends an EventMessage
 func (s *SignalingManager) SendEventMessage(eventType string, msgContent string, target *string, rawData ...json.RawMessage) {
 	var targetVal string
 	if target != nil {
@@ -128,7 +129,6 @@ func (s *SignalingManager) SendEventMessage(eventType string, msgContent string,
 
 // RegisterWithSignalingServer sends an EventMessage specifically for registering the device with the signaling server, making it discoverable by other devices.
 func (s *SignalingManager) RegisterWithSignalingServer() {
-
 	event := EventMessage{
 		Type:    "connect",
 		Message: "Registering device with the signaling server",

@@ -43,11 +43,13 @@ func main() {
 	select {}
 }
 
+// GenerateIdentifier generates a time based 6 digit value as a unique identifier
 func GenerateIdentifier() string {
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	return fmt.Sprintf("%06d", r.Intn(1000000))
 }
 
+// RouteWebRTCToServer takes streaming.EventMessage data as []byte, unmarshals the data as signaling.EventMessage, and pipes it into the SignalingManager
 func RouteWebRTCToServer(w *streaming.WebRTCManager, s *signaling.SignalingManager) {
 	go func() {
 		for rawBytes := range w.MessageChan {
