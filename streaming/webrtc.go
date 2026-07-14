@@ -31,6 +31,7 @@ type EventMessage struct {
 	Data    json.RawMessage `json:"data,omitempty"`
 }
 
+// StartWebRTC initializes the webRTC PeerConnection, Data Channel, and callbacks
 func (w *WebRTCManager) StartWebRTC(isSender bool) {
 	var err error
 	if w.WC == nil {
@@ -173,6 +174,7 @@ func (w *WebRTCManager) StartWebRTC(isSender bool) {
 	}
 }
 
+// HandleICECandidate unmarshals inncomming ICE candidates to find the best connection option
 func (w *WebRTCManager) HandleICECandidate(candidateBytes []byte) error {
 	w.Mux.RLock()
 	pc := w.PC
@@ -200,6 +202,7 @@ func (w *WebRTCManager) HandleICECandidate(candidateBytes []byte) error {
 	return nil
 }
 
+// SendOffer creates and sends the Offer to start the webrtc handshake
 func (w *WebRTCManager) SendOffer(target string) error {
 	w.Mux.RLock()
 	pc := w.PC
@@ -247,6 +250,7 @@ func (w *WebRTCManager) SendOffer(target string) error {
 	return nil
 }
 
+// HandleOffer applies the remote description and sends an Answer in response to the Offer
 func (w *WebRTCManager) HandleOffer(sender string, offerBytes []byte) error {
 	w.Mux.RLock()
 	pc := w.PC
@@ -303,6 +307,7 @@ func (w *WebRTCManager) HandleOffer(sender string, offerBytes []byte) error {
 	return nil
 }
 
+// HandleAnswer applies the remote description to complete the webrtc handshake
 func (w *WebRTCManager) HandleAnswer(answerBytes []byte) error {
 	w.Mux.RLock()
 	pc := w.PC
@@ -330,6 +335,7 @@ func (w *WebRTCManager) HandleAnswer(answerBytes []byte) error {
 	return nil
 }
 
+// SafeWriteBytesToDC sends []byte data through the data channel
 func (w *WebRTCManager) SafeWriteBytesToDC(data []byte) error {
 	w.Mux.RLock()
 	defer w.Mux.RUnlock()
@@ -341,6 +347,7 @@ func (w *WebRTCManager) SafeWriteBytesToDC(data []byte) error {
 	return w.DC.Send(data)
 }
 
+// DisconnectWebRTC closes the Data Channel and Peer connection, effectively closing the webrtc connection
 func (w *WebRTCManager) DisconnectWebRTC() {
 	w.Mux.Lock()
 	defer w.Mux.Unlock()
