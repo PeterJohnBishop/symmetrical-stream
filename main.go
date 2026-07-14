@@ -9,17 +9,20 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/peterjohnbishop/symmetrical-stream/chunking"
 	"github.com/peterjohnbishop/symmetrical-stream/signaling"
 	"github.com/peterjohnbishop/symmetrical-stream/streaming"
 )
 
 func main() {
+	// load the websocket/signaling server address
 	if err := godotenv.Load(); err != nil {
 		log.Print("No .env file found")
 	}
 
 	mux := &sync.RWMutex{}
 
+	// initialize the SignalingManager, make the inital connection, and start listening for events
 	ss := &signaling.SignalingManager{
 		Mux:         mux,
 		Identifier:  GenerateIdentifier(),
@@ -29,6 +32,7 @@ func main() {
 	ss.ConnectToSignalingServer()
 	go ss.StartListening()
 
+	// initializer the WebRTCManager, and start up the background process to pipe messages from the WebRTCManager to the SignalingManager
 	wrtc := &streaming.WebRTCManager{
 		Mux:         mux,
 		WC:          ss.Conn,
@@ -39,6 +43,20 @@ func main() {
 	}
 
 	RouteWebRTCToServer(wrtc, ss)
+
+	ck := &chunking.ChunkManager{
+		ChunkSize:    chunking.DefaultChunkSize,
+		ProgressChan: make(chan int, 100),
+		StatusChan:   make(chan string, 100),
+		ErrChan:      make(chan error, 100),
+	}
+
+	// data sent through the webrtc data channel are sent to ProcessIncomingMessage
+	go func() {
+		for msg := range wrtc.DataChan {
+			ck.ProcessIncomingMessage(msg)
+		}
+	}()
 
 	select {}
 }
