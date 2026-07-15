@@ -2,28 +2,65 @@
 package tui
 
 import (
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"github.com/peterjohnbishop/symmetrical-stream/signaling"
+	"github.com/peterjohnbishop/symmetrical-stream/streaming"
 )
 
 type (
-	connectedMsg struct{}
-	eventMsg     struct{ msg signaling.EventMessage }
-	errorMsg     struct{ err error }
+	connectedMsg    struct{}
+	eventMsg        struct{ msg signaling.EventMessage }
+	errorMsg        struct{ err error }
+	Role            string
+	webrtcStatusMsg struct{ status string }
+)
+
+const (
+	RoleSender   Role = "Sender"
+	RoleReceiver Role = "Receiver"
 )
 
 type Model struct {
-	sm     *signaling.SignalingManager
-	status string
-	logs   []string
+	sm          *signaling.SignalingManager
+	wm          *streaming.WebRTCManager
+	status      string
+	logs        []string
+	role        Role
+	pathInput   textinput.Model
+	totpInput   textinput.Model
+	totpDisplay string
+	focusIndex  int
 }
 
-func InitialModel(sm *signaling.SignalingManager) Model {
-	return Model{
-		sm:     sm,
-		status: "Initializing...",
-		logs:   []string{},
+func InitialModel(sm *signaling.SignalingManager, wm *streaming.WebRTCManager) Model {
+	pi := textinput.New()
+	pi.Placeholder = "Enter file path to send..."
+	pi.CharLimit = 256
+	pi.SetWidth(40)
+
+	ti := textinput.New()
+	ti.Placeholder = "Enter 6-digit ID..."
+	ti.CharLimit = 6
+	ti.SetWidth(40)
+
+	styles := ti.Styles()
+	styles.Focused.Text = pinkStyle
+	ti.SetStyles(styles)
+
+	m := Model{
+		sm:          sm,
+		wm:          wm,
+		status:      "Disconnected",
+		logs:        []string{},
+		role:        RoleSender,
+		pathInput:   pi,
+		totpInput:   ti,
+		totpDisplay: "------",
+		focusIndex:  0,
 	}
+
+	return updateFocus(m)
 }
 
 func (m Model) Init() tea.Cmd {
@@ -31,6 +68,7 @@ func (m Model) Init() tea.Cmd {
 		m.connectCmd(),
 		waitForMessage(m.sm.MessageChan),
 		waitForError(m.sm.ErrChan),
+		waitForWebRTCStatus(m.wm.StatusChan),
 	)
 }
 
@@ -63,5 +101,15 @@ func waitForError(sub <-chan error) tea.Cmd {
 			return nil
 		}
 		return errorMsg{err: err}
+	}
+}
+
+func waitForWebRTCStatus(sub <-chan string) tea.Cmd {
+	return func() tea.Msg {
+		status, ok := <-sub
+		if !ok {
+			return nil
+		}
+		return webrtcStatusMsg{status: status}
 	}
 }

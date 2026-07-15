@@ -61,7 +61,7 @@ func main() {
 		}
 	}()
 
-	app := tui.InitialModel(ss)
+	app := tui.InitialModel(ss, wrtc)
 	p := tea.NewProgram(app)
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Alas, there's been an error starting the TUI: %v", err)
