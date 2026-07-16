@@ -56,8 +56,11 @@ func (w *WebRTCManager) StartWebRTC(isSender bool) {
 
 		w.DC.OnMessage(func(msg webrtc.DataChannelMessage) {
 			if w.DataChan != nil {
+				safeData := make([]byte, len(msg.Data))
+				copy(safeData, msg.Data)
+
 				select {
-				case w.DataChan <- msg.Data:
+				case w.DataChan <- safeData:
 				default:
 				}
 			}
@@ -79,8 +82,11 @@ func (w *WebRTCManager) StartWebRTC(isSender bool) {
 
 			d.OnMessage(func(msg webrtc.DataChannelMessage) {
 				if w.DataChan != nil {
+					safeData := make([]byte, len(msg.Data))
+					copy(safeData, msg.Data)
+
 					select {
-					case w.DataChan <- msg.Data:
+					case w.DataChan <- safeData:
 					default:
 					}
 				}
