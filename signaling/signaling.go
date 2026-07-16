@@ -12,11 +12,13 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+var DefaultServerURL = "localhost:8080"
+
 // ConnectToSignalingServer establishes the websocket connection to the signaling server.
 func (s *SignalingManager) ConnectToSignalingServer() {
 	host := os.Getenv("HOST")
 	if host == "" {
-		host = "localhost:8080"
+		host = DefaultServerURL
 	}
 	scheme := "wss"
 	if strings.HasPrefix(host, "localhost") || strings.HasPrefix(host, "127.0.0.1") {
