@@ -77,10 +77,9 @@ func (m Model) Init() tea.Cmd {
 		waitForMessage(m.sm.MessageChan),
 		waitForError(m.sm.ErrChan),
 		waitForWebRTCStatus(m.wm.StatusChan),
-		waitForWebRTCData(m.wm.DataChan),        // Listen for incoming chunks
-		waitForChunkStatus(m.cm.StatusChan),     // Listen for hashing/parsing status
-		waitForChunkProgress(m.cm.ProgressChan), // Listen for 0-100% progress
-		waitForChunkError(m.cm.ErrChan),         // Listen for IO/Hashing errors
+		waitForChunkStatus(m.cm.StatusChan),
+		waitForChunkProgress(m.cm.ProgressChan),
+		waitForChunkError(m.cm.ErrChan),
 	)
 }
 

@@ -22,6 +22,7 @@ type ChunkManager struct {
 	currentHash  hash.Hash
 	expectedHash []byte
 	filename     string
+	expectedSeq  uint32
 
 	ProgressChan chan int
 	StatusChan   chan string

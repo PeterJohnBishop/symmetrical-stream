@@ -35,14 +35,16 @@ func (cm *ChunkManager) ProcessIncomingMessage(msg []byte) {
 	switch t {
 	case TypeMetadata:
 		if cm.OutDir == "" {
-			cm.ErrChan <- errors.New("incoming file rejected: output directory not set by user")
+			cm.ErrChan <- errors.New("incoming file rejected: output directory not set")
 			return
 		}
 
 		cm.expectedHash = make([]byte, 32)
 		copy(cm.expectedHash, payload[0:32])
-
 		cm.filename = string(payload[40:])
+
+		// Reset the sequence tracker for a new file
+		cm.expectedSeq = 0
 
 		if err := os.MkdirAll(cm.OutDir, 0o755); err != nil {
 			cm.ErrChan <- fmt.Errorf("failed to create directories: %w", err)
@@ -64,6 +66,15 @@ func (cm *ChunkManager) ProcessIncomingMessage(msg []byte) {
 		if cm.currentFile == nil {
 			return
 		}
+
+		seq := binary.BigEndian.Uint32(payload[0:4])
+
+		if seq != cm.expectedSeq {
+			cm.ErrChan <- fmt.Errorf("CRITICAL PACKET LOSS: Expected chunk %d, but got chunk %d", cm.expectedSeq, seq)
+		}
+
+		cm.expectedSeq = seq + 1
+
 		data := payload[4:]
 		cm.currentFile.Write(data)
 		cm.currentHash.Write(data)
@@ -82,7 +93,6 @@ func (cm *ChunkManager) ProcessIncomingMessage(msg []byte) {
 		} else {
 			cm.StatusChan <- fmt.Sprintf("File %s received and verified successfully!", cm.filename)
 		}
-		cm.currentFile = nil // Reset state
-
+		cm.currentFile = nil
 	}
 }
