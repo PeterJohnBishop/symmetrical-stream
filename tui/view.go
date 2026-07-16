@@ -28,7 +28,7 @@ func (m Model) View() tea.View {
 	s.WriteString("\n\n")
 	s.WriteString(pinkStyle.Render(logo))
 	s.WriteString("\n\n")
-	s.WriteString("	- file transfer over webrtc\n\n")
+	s.WriteString("	- file transfer over webrtc (v1.0.3)\n\n")
 	s.WriteString(fmt.Sprintf("Status: %s\n\n", m.status))
 
 	if m.progress > 0 && m.progress <= 100 {
