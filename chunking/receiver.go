@@ -1,6 +1,7 @@
 package chunking
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -17,7 +18,7 @@ func (cm *ChunkManager) SetOutDir(dir string) {
 
 func (cm *ChunkManager) ProcessIncomingMessage(msg []byte) {
 	if len(msg) < 5 {
-		return // Invalid packet
+		return
 	}
 
 	t := msg[0]
@@ -38,7 +39,9 @@ func (cm *ChunkManager) ProcessIncomingMessage(msg []byte) {
 			return
 		}
 
-		cm.expectedHash = payload[0:32]
+		cm.expectedHash = make([]byte, 32)
+		copy(cm.expectedHash, payload[0:32])
+
 		cm.filename = string(payload[40:])
 
 		if err := os.MkdirAll(cm.OutDir, 0o755); err != nil {
@@ -61,7 +64,7 @@ func (cm *ChunkManager) ProcessIncomingMessage(msg []byte) {
 		if cm.currentFile == nil {
 			return
 		}
-		data := payload[4:] // Skip sequence number
+		data := payload[4:]
 		cm.currentFile.Write(data)
 		cm.currentHash.Write(data)
 
@@ -72,12 +75,14 @@ func (cm *ChunkManager) ProcessIncomingMessage(msg []byte) {
 		cm.currentFile.Close()
 
 		finalHash := cm.currentHash.Sum(nil)
-		if string(finalHash) != string(cm.expectedHash) {
+
+		if !bytes.Equal(finalHash, cm.expectedHash) {
 			os.Remove(cm.currentFile.Name())
 			cm.ErrChan <- fmt.Errorf("SHA256 mismatch: file %s corrupted", cm.filename)
 		} else {
 			cm.StatusChan <- fmt.Sprintf("File %s received and verified successfully!", cm.filename)
 		}
 		cm.currentFile = nil // Reset state
+
 	}
 }
