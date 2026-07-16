@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"os"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -18,11 +19,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.totpDisplay = m.sm.Identifier
 		}
 		return m, nil
-
-	case webrtcStatusMsg:
-		m.status = msg.status
-		m.logs = append(m.logs, fmt.Sprintf("[WebRTC] %s", msg.status))
-		return m, waitForWebRTCStatus(m.wm.StatusChan)
 
 	case eventMsg:
 		m.logs = append(m.logs, fmt.Sprintf("<- Received '%s' from %s", msg.msg.Type, msg.msg.Sender))
@@ -74,6 +70,67 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = "Error: check logs"
 		m.logs = append(m.logs, fmt.Sprintf("[ERROR] %v", msg.err))
 		return m, waitForError(m.sm.ErrChan)
+
+	case webrtcStatusMsg:
+		m.status = msg.status
+		m.logs = append(m.logs, fmt.Sprintf("[WebRTC] %s", msg.status))
+
+		// SENDER TRIGGER: Data channel is open, start slicing and sending the file
+		if msg.status == "Local Data channel is open. Sending..." && m.role == RoleSender {
+			filePath := m.pathInput.Value()
+
+			go func() {
+				transmitFunc := func(data []byte) error {
+					return m.wm.SafeWriteBytesToDC(data)
+				}
+
+				waitBufferFunc := func() {
+					// Basic backpressure yield to prevent suffocating the Pion WebRTC routine
+					m.wm.Mux.RLock()
+					dc := m.wm.DC
+					m.wm.Mux.RUnlock()
+
+					if dc != nil {
+						// Wait if more than 1MB is buffered in the data channel
+						for dc.BufferedAmount() > 1024*1024 {
+							time.Sleep(5 * time.Millisecond)
+						}
+					}
+				}
+
+				if err := m.cm.SendFile(filePath, transmitFunc, waitBufferFunc); err != nil {
+					m.cm.ErrChan <- err
+				}
+			}()
+		}
+
+		// RECEIVER TRIGGER: Data channel is open, ensure output directory is locked in
+		if msg.status == "Remote Data channel opened. Ready to receive..." && m.role == RoleReceiver {
+			m.cm.SetOutDir(m.pathInput.Value())
+		}
+
+		return m, waitForWebRTCStatus(m.wm.StatusChan)
+
+	case webrtcDataMsg:
+		// Receiver intercepts incoming WebRTC bytes and routes them directly to the ChunkManager
+		if m.role == RoleReceiver {
+			m.cm.ProcessIncomingMessage(msg.data)
+		}
+		return m, waitForWebRTCData(m.wm.DataChan)
+
+	case chunkStatusMsg:
+		m.status = msg.status
+		m.logs = append(m.logs, fmt.Sprintf("[Chunking] %s", msg.status))
+		return m, waitForChunkStatus(m.cm.StatusChan)
+
+	case chunkProgressMsg:
+		m.progress = msg.progress
+		return m, waitForChunkProgress(m.cm.ProgressChan)
+
+	case chunkErrorMsg:
+		m.status = "File Error: check logs"
+		m.logs = append(m.logs, fmt.Sprintf("[File Error] %v", msg.err))
+		return m, waitForChunkError(m.cm.ErrChan)
 
 	case tea.KeyPressMsg:
 		switch msg.String() {

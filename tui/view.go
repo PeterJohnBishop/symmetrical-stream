@@ -23,6 +23,18 @@ func (m Model) View() tea.View {
 	s.WriteString("---> WebRTC File Transfer <---\n")
 	s.WriteString(fmt.Sprintf("Status: %s\n\n", m.status))
 
+	if m.progress > 0 && m.progress <= 100 {
+		bar := ""
+		for i := 0; i < 20; i++ {
+			if float64(i) < (float64(m.progress)/100.0)*20 {
+				bar += pinkStyle.Render("█")
+			} else {
+				bar += dimStyle.Render("░")
+			}
+		}
+		s.WriteString(fmt.Sprintf("Progress: [%s] %d%%\n\n", bar, m.progress))
+	}
+
 	// role selection
 	rolePtr := emptyPointer
 	if m.focusIndex == 0 {
