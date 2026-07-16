@@ -56,13 +56,12 @@ func (w *WebRTCManager) StartWebRTC(isSender bool) {
 
 		w.DC.OnMessage(func(msg webrtc.DataChannelMessage) {
 			if w.DataChan != nil {
+				// Deep copy to escape Pion's volatile read buffer
 				safeData := make([]byte, len(msg.Data))
 				copy(safeData, msg.Data)
 
-				select {
-				case w.DataChan <- safeData:
-				default:
-				}
+				// BLOCK and guarantee delivery to the background worker. NO select / default.
+				w.DataChan <- safeData
 			}
 		})
 	} else {
@@ -82,13 +81,12 @@ func (w *WebRTCManager) StartWebRTC(isSender bool) {
 
 			d.OnMessage(func(msg webrtc.DataChannelMessage) {
 				if w.DataChan != nil {
+					// Deep copy to escape Pion's volatile read buffer
 					safeData := make([]byte, len(msg.Data))
 					copy(safeData, msg.Data)
 
-					select {
-					case w.DataChan <- safeData:
-					default:
-					}
+					// BLOCK and guarantee delivery to the background worker. NO select / default.
+					w.DataChan <- safeData
 				}
 			})
 		})

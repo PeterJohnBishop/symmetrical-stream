@@ -23,7 +23,6 @@ func (cm *ChunkManager) SendFile(filePath string, transmitFunc func([]byte) erro
 	}
 	totalSize := stat.Size()
 
-	// 1. Calculate File Hash
 	cm.StatusChan <- fmt.Sprintf("Hashing file %s...", filepath.Base(filePath))
 	h := sha256.New()
 	if _, err := io.Copy(h, file); err != nil {
@@ -32,7 +31,6 @@ func (cm *ChunkManager) SendFile(filePath string, transmitFunc func([]byte) erro
 	fullHash := h.Sum(nil)
 	file.Seek(0, 0)
 
-	// 2. Send Metadata
 	filename := []byte(filepath.Base(filePath))
 	meta := make([]byte, 40+len(filename))
 	copy(meta[0:32], fullHash)
@@ -43,7 +41,6 @@ func (cm *ChunkManager) SendFile(filePath string, transmitFunc func([]byte) erro
 		return err
 	}
 
-	// 3. Send Chunks with Backpressure
 	cm.StatusChan <- "Transmitting file data..."
 	buf := make([]byte, cm.ChunkSize)
 	var seq uint32 = 0
@@ -51,41 +48,42 @@ func (cm *ChunkManager) SendFile(filePath string, transmitFunc func([]byte) erro
 
 	for {
 		n, err := file.Read(buf)
+
+		// Process bytes FIRST if any were read, even if EOF is returned simultaneously
+		if n > 0 {
+			waitBufferFunc()
+
+			payload := make([]byte, 4+n)
+			binary.BigEndian.PutUint32(payload[0:4], seq)
+			copy(payload[4:], buf[:n])
+
+			if errTransmit := transmitFunc(encodeTLV(TypeChunk, payload)); errTransmit != nil {
+				return errTransmit
+			}
+
+			seq++
+			bytesSent += int64(n)
+
+			progress := int((float64(bytesSent) / float64(totalSize)) * 100)
+			select {
+			case cm.ProgressChan <- progress:
+			default:
+			}
+		}
+
+		// Check for EOF only AFTER processing the final chunk
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
 			return err
 		}
-
-		// Check backpressure before sending
-		waitBufferFunc()
-
-		payload := make([]byte, 4+n)
-		binary.BigEndian.PutUint32(payload[0:4], seq)
-		copy(payload[4:], buf[:n])
-
-		if err := transmitFunc(encodeTLV(TypeChunk, payload)); err != nil {
-			return err
-		}
-
-		seq++
-		bytesSent += int64(n)
-
-		// Emit Progress
-		progress := int((float64(bytesSent) / float64(totalSize)) * 100)
-		select {
-		case cm.ProgressChan <- progress:
-		default:
-		}
 	}
 
-	// 4. Send EOF
 	cm.StatusChan <- "Transmission complete. Sending EOF..."
 	return transmitFunc(encodeTLV(TypeEOF, nil))
 }
 
-// encodeTLV creates a Type-Length-Value packet
 func encodeTLV(t byte, payload []byte) []byte {
 	length := uint32(len(payload))
 	buf := make([]byte, 5+length)
